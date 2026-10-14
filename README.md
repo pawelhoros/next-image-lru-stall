@@ -1,45 +1,39 @@
-This is a [Next.js](https://nextjs.org/) template to use when reporting a [bug in the Next.js repository](https://github.com/vercel/next.js/issues) with the `app/` directory.
+# next/image: cache HITs wait for the disk-LRU scan after server start
 
-## Getting Started
+Minimal reproduction for a `next start` issue: after the server starts, the
+first `/_next/image` requests are held until the whole `.next/cache/images`
+directory has been scanned to build the disk LRU, even when every request is
+a cache HIT.
 
-These are the steps you should follow when creating a bug report:
+Tested with `next@16.5.0-canary.10` and `next@16.4.0`.
 
-- Bug reports must be verified against the `next@canary` release. The canary version of Next.js ships daily and includes all features and fixes that have not been released to the stable version yet. Think of canary as a public beta. Some issues may already be fixed in the canary version, so please verify that your issue reproduces before opening a new issue. Issues not verified against `next@canary` will be closed after 30 days.
-- Make sure your issue is not a duplicate. Use the [GitHub issue search](https://github.com/vercel/next.js/issues) to see if there is already an open issue that matches yours. If that is the case, upvoting the other issue's first comment is desirable as we often prioritize issues based on the number of votes they receive. Note: Adding a "+1" or "same issue" comment without adding more context about the issue should be avoided. If you only find closed related issues, you can link to them using the issue number and `#`, eg.: `I found this related issue: #3000`.
-- If you think the issue is not in Next.js, the best place to ask for help is our [Discord community](https://nextjs.org/discord) or [GitHub discussions](https://github.com/vercel/next.js/discussions). Our community is welcoming and can often answer a project-related question faster than the Next.js core team.
-- Make the reproduction as minimal as possible. Try to exclude any code that does not help reproducing the issue. E.g. if you experience problems with Routing, including ESLint configurations or API routes aren't necessary. The less lines of code is to read through, the easier it is for the Next.js team to investigate. It may also help catching bugs in your codebase before publishing an issue.
-- Don't forget to create a new repository on GitHub and make it public so that anyone can view it and reproduce it.
-
-## How to use this template
-
-Execute [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app) with [npm](https://docs.npmjs.com/cli/init), [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/), or [pnpm](https://pnpm.io) to bootstrap the example:
+## Run
 
 ```bash
-npx create-next-app --example reproduction-template reproduction-app
+npm install
+npm run build
+node repro.mjs
 ```
 
-```bash
-yarn create next-app --example reproduction-template reproduction-app
+`repro.mjs`:
+
+1. Starts `next start`, requests `/photo.png` through `/_next/image` once so it
+   is cached, stops the server.
+2. Starts the server again and sends 10 parallel requests for the same image.
+3. Adds 4500 filler entries of 57 KB to `.next/cache/images` (about the size of
+   a cache that has been persisted across deploys), restarts and measures again.
+4. Removes the filler entries.
+
+Size can be changed with `FILLER_ENTRIES` and `FILLER_BYTES`.
+
+## Result (MacBook, SSD, files in OS page cache)
+
+```
+cache with 1 entry       : first 10 parallel image requests after start took 14-15 ms, x-nextjs-cache: HIT
+cache with 4501 entries (257 MB): first 10 parallel image requests after start took 421-422 ms, x-nextjs-cache: HIT
 ```
 
-```bash
-pnpm create next-app --example reproduction-template reproduction-app
-```
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-- [How to Contribute to Open Source (Next.js)](https://www.youtube.com/watch?v=cuoNzXFLitc) - a video tutorial by Lee Robinson
-- [Triaging in the Next.js repository](https://github.com/vercel/next.js/blob/canary/contributing.md#triaging) - how we work on issues
-- [CodeSandbox](https://codesandbox.io/s/github/vercel/next.js/tree/canary/examples/reproduction-template) - Edit this repository on CodeSandbox
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
-
-## Deployment
-
-If your reproduction needs to be deployed, the easiest way is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+All requests finish at the same moment and all are HITs. The delay grows with
+the size of the cache directory and with disk speed: on a production Docker
+host with a bind-mounted cache of 4480 entries / 251 MB the same stall was
+about 12 s.
